@@ -277,13 +277,26 @@ public class FilePipelineStoreTask extends AbstractTask implements PipelineStore
       File[] files = pathToPipeline.listFiles();
 
 
-      //if any file found
+      // if any file found
       if (files.length > 0) {
         LOG.info("Some files in runInfo could not be deleted. Hence Masking the error");
-        runInfoDeleted = true;   
+        runInfoDeleted = true;
+        
+        for(File file: files) {
+          String fileName = file.getName();
+          
+          //The patch will only work, if there are only .nfs files present.
+          if(!fileName.contains(".nfs")) {
+            
+            runInfoDeleted = false;
+            LOG.error("There are more files present, except .nfs files.");
+            break;
+          } 
+        }   
       } else {
         LOG.error("Some exception occurred, Please go through the logs.");
       }
+
     }
     
     deleted &= runInfoDeleted;
