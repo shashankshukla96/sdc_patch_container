@@ -50,3 +50,68 @@
 >       }
 731d766
 < 
+81a82,86
+> 
+> //added new import
+> import java.io.File;
+> 
+> 
+257c262,264
+<   private boolean cleanUp(String name) {
+---
+>   private boolean cleanUp(String name) throws IOException {
+> 
+>     //getPipelineDir(name) will return the path to the "sdc/data/pipeline/pipeline_name/"
+259c266,302
+<     deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
+---
+>     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
+>     
+> 
+>     //created path to the pipeline's runInfo
+>     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
+> 
+> 
+>     //If runInfo returned false, i.e. some files(pipelineStateHistory.json) in runInfo
+>     if (!runInfoDeleted) {
+>       
+>       //reading files from that directory
+>       File[] files = pathToPipeline.listFiles();
+> 
+> 
+>       // if any file found
+>       if (files.length > 0) {
+>         LOG.info("Some files in runInfo could not be deleted. Hence Masking the error");
+>         runInfoDeleted = true;
+>         
+>         for(File file: files) {
+>           String fileName = file.getName();
+>           
+>           //The patch will only work, if there are only .nfs files present.
+>           if(!fileName.contains(".nfs")) {
+>             
+>             runInfoDeleted = false;
+>             LOG.error("There are more files present, except .nfs files.");
+>             break;
+>           } 
+>         }   
+>       } else {
+>         LOG.error("Some exception occurred, Please go through the logs.");
+>       }
+> 
+>     }
+>     
+>     deleted &= runInfoDeleted;
+280c323,326
+<         if (!cleanUp(name)) {
+---
+> 
+>         //added try catch
+>         try {
+>           if (!cleanUp(name)) {
+282a329,331
+>       }catch(IOException e) {
+>         LOG.error("Error in opening pipeline runInfo directory.");
+>       }
+731d779
+< 
