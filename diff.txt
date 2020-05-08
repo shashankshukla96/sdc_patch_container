@@ -1,94 +1,140 @@
-81a82,86
-> 
-> //added new import
+30d29
+< import com.streamsets.datacollector.execution.EventListenerManager;
+58d56
+< import com.streamsets.datacollector.util.credential.PipelineCredentialHandler;
+82a81,82
 > import java.io.File;
 > 
+102,104c102
+<   private EventListenerManager eventListenerManager;
+<   private final PipelineCreator pipelineCreator;
+<   private final PipelineCredentialHandler encryptingCredentialHandler;
+---
+>   private StateEventListener stateEventListener;
+107,114c105,106
+<   public FilePipelineStoreTask(
+<       RuntimeInfo runtimeInfo,
+<       StageLibraryTask stageLibrary,
+<       PipelineStateStore pipelineStateStore,
+<       EventListenerManager eventListenerManager,
+<       LockCache<String> lockCache,
+<       PipelineCredentialHandler encryptingCredentialHandler
+<   ) {
+---
+>   public FilePipelineStoreTask(RuntimeInfo runtimeInfo, StageLibraryTask stageLibrary,
+>     PipelineStateStore pipelineStateStore, LockCache<String> lockCache) {
+123,132d114
+<     pipelineCreator = new PipelineCreator(
+<         stageLibrary.getPipeline(),
+<         SCHEMA_VERSION,
+<         buildInfo.getVersion(),
+<         runtimeInfo.getId(),
+<         this::getDefaultStatsAggrStageInstance,
+<         this::getDefaultTestOriginStageInstance
+<     );
+<     this.eventListenerManager = eventListenerManager;
+<     this.encryptingCredentialHandler = encryptingCredentialHandler;
+141c123
+<     eventListenerManager.addStateEventListener(stateListener);
+---
+>     stateEventListener = stateListener;
+221c203,237
+<       PipelineConfiguration pipeline = pipelineCreator.create(user, pipelineId, pipelineTitle, description, new Date());
+---
+>       Date date = new Date();
+>       UUID uuid = UUID.randomUUID();
+>       PipelineInfo info = new PipelineInfo(
+>           pipelineId,
+>           pipelineTitle,
+>           description,
+>           date,
+>           date,
+>           user,
+>           user,
+>           REV,
+>           uuid,
+>           false,
+>           null,
+>           buildInfo.getVersion(),
+>           runtimeInfo.getId()
+>       );
 > 
-257c262,264
+>       PipelineConfiguration pipeline = new PipelineConfiguration(
+>           SCHEMA_VERSION,
+>           PipelineConfigBean.VERSION,
+>           pipelineId,
+>           uuid,
+>           pipelineTitle,
+>           description,
+>           stageLibrary.getPipeline().getPipelineDefaultConfigs(),
+>           Collections.emptyMap(),
+>           null,
+>           Collections.emptyList(),
+>           null,
+>           getDefaultStatsAggrStageInstance(),
+>           Collections.emptyList(),
+>           Collections.emptyList(),
+>           getDefaultTestOriginStageInstance()
+>       );
+224,225d239
+<         DataStore dataStorePipeline = new DataStore(getPipelineFile(pipelineId).toFile());
+<         DataStore dataStoreInfo = new DataStore(getInfoFile(pipelineId).toFile());
+227,228c241,242
+<             OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+<             OutputStream infoFile = dataStoreInfo.getOutputStream()
+---
+>             OutputStream infoFile = Files.newOutputStream(getInfoFile(pipelineId));
+>             OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(pipelineId))
+230c244
+<           // it is important to always modify pipeline.json before modifying info.json in order for recovery to work
+---
+>           json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(info));
+232,234d245
+<           dataStorePipeline.commit(pipelineFile);
+<           json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipeline.getInfo()));
+<           dataStoreInfo.commit(infoFile);
+237,239d247
+<         } finally {
+<           dataStorePipeline.release();
+<           dataStoreInfo.release();
+246c254
+<       pipeline.setPipelineInfo(pipeline.getInfo());
+---
+>       pipeline.setPipelineInfo(info);
+251,252c259,260
 <   private boolean cleanUp(String name) {
+<     LogUtil.resetRollingFileAppender(name, "0", STATE);
 ---
 >   private boolean cleanUp(String name) throws IOException {
 > 
->     //getPipelineDir(name) will return the path to the "sdc/data/pipeline/pipeline_name/"
-259c266,289
+254c262,302
 <     deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
 ---
 >     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
 >     
 > 
->     //created path to the pipeline's runInfo
+>     //create the path to the pipeline's runInfo
 >     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
 > 
 > 
->     //If runInfo returned false, i.e. some files(pipelineStateHistory.json) in runInfo
+>     //If runInfo returns false, i.e. some files(pipelineStateHistory.json) in runInfo didn't get delete.
 >     if (!runInfoDeleted) {
 >       
 >       //reading files from that directory
 >       File[] files = pathToPipeline.listFiles();
 > 
 > 
->       //if any file found
+>       // if any file found inside the runInfo directory
 >       if (files.length > 0) {
->         LOG.info("Some files in runInfo could not be deleted. Hence Masking the error");
->         runInfoDeleted = true;   
->       } else {
->         LOG.error("Some exception occurred, Please go through the logs.");
->       }
->     }
->     
->     deleted &= runInfoDeleted;
-280c310,313
-<         if (!cleanUp(name)) {
----
-> 
->         //added try catch
->         try {
->           if (!cleanUp(name)) {
-282a316,318
->       }catch(IOException e) {
->         LOG.error("Error in opening pipeline runInfo directory.");
->       }
-731d766
-< 
-81a82,86
-> 
-> //added new import
-> import java.io.File;
-> 
-> 
-257c262,264
-<   private boolean cleanUp(String name) {
----
->   private boolean cleanUp(String name) throws IOException {
-> 
->     //getPipelineDir(name) will return the path to the "sdc/data/pipeline/pipeline_name/"
-259c266,302
-<     deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
----
->     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
->     
-> 
->     //created path to the pipeline's runInfo
->     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
-> 
-> 
->     //If runInfo returned false, i.e. some files(pipelineStateHistory.json) in runInfo
->     if (!runInfoDeleted) {
->       
->       //reading files from that directory
->       File[] files = pathToPipeline.listFiles();
-> 
-> 
->       // if any file found
->       if (files.length > 0) {
->         LOG.info("Some files in runInfo could not be deleted. Hence Masking the error");
+>         LOG.info("Some files in runInfo could not be deleted. Checking if NFS file system is used");
 >         runInfoDeleted = true;
 >         
 >         for(File file: files) {
 >           String fileName = file.getName();
->           
->           //The patch will only work, if there are only .nfs files present.
->           if(!fileName.contains(".nfs")) {
+> 
+>           //we check the presence of those files, whose name begins with '.nfs',
+>           //if such file exists, then we assume the presence of NFS filesystem and do not attempt to delete them.          
+>           if(!fileName.beginsWith(".nfs")) {
 >             
 >             runInfoDeleted = false;
 >             LOG.error("There are more files present, except .nfs files.");
@@ -102,16 +148,141 @@
 >     }
 >     
 >     deleted &= runInfoDeleted;
-280c323,326
+>     if(deleted) {
+>       LogUtil.resetRollingFileAppender(name, "0", STATE);
+>     }
+272c320,323
 <         if (!cleanUp(name)) {
 ---
 > 
 >         //added try catch
 >         try {
 >           if (!cleanUp(name)) {
-282a329,331
+274a326,328
 >       }catch(IOException e) {
 >         LOG.error("Error in opening pipeline runInfo directory.");
 >       }
-731d779
+289,290c343,344
+<           if (eventListenerManager != null) {
+<             eventListenerManager.broadcastStateChange(currentState, latestState, null, offset);
+---
+>           if (stateEventListener != null) {
+>             stateEventListener.onStateChange(currentState, latestState, "", null, offset);
+317,319c371
+<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+<       syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
+<       try (InputStream infoFile = dataStoreInfo.getInputStream()){
+---
+>       try (InputStream infoFile = Files.newInputStream(getInfoFile(name))){
+329,364d380
+<   private void syncPipelineWithPipelineInfoIfNeeded(DataStore dataStoreInfo, String name)
+<       throws PipelineStoreException {
+<     try {
+<       boolean syncNeeded = false;
+<       if (!dataStoreInfo.exists()) {
+<         syncNeeded = true;
+<       } else {
+<         try (InputStream infoFile = dataStoreInfo.getInputStream()) {
+<           if (dataStoreInfo.isRecovered()) {
+<             syncNeeded = true;
+<           }
+<         }
+<       }
+<       if (syncNeeded) {
+<         syncPipelineWithPipelineInfo(name);
+<       }
+<     } catch (IOException e) {
+<       throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, e);
+<     }
+<   }
 < 
+<   private void syncPipelineWithPipelineInfo(String name) throws IOException {
+<     DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+<     try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+<       PipelineConfigurationJson pipelineConfigBean =
+<           json.readValue(pipelineFile, PipelineConfigurationJson.class);
+<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+<       try (OutputStream infoFile = dataStoreInfo.getOutputStream()) {
+<         json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipelineConfigBean.getInfo().getPipelineInfo()));
+<         dataStoreInfo.commit(infoFile);
+<       } finally {
+<         dataStoreInfo.release();
+<       }
+<     }
+<   }
+< 
+371,373c387
+<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+<       syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
+<       try (InputStream infoFile = dataStoreInfo.getInputStream()) {
+---
+>       try (InputStream infoFile = Files.newInputStream(getInfoFile(name))) {
+388,389c402
+<       PipelineConfiguration pipeline,
+<       boolean encryptCredentials
+---
+>       PipelineConfiguration pipeline
+419,423d431
+<       if (encryptCredentials) {
+<         encryptingCredentialHandler.handlePipelineConfigCredentials(pipeline);
+<       }
+<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+425,426c433,434
+<           OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+<           OutputStream infoFile = dataStoreInfo.getOutputStream()
+---
+>           OutputStream infoFile = Files.newOutputStream(getInfoFile(name));
+>           OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(name))
+429,431d436
+<         pipeline.setInfo(info);
+<         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
+<         dataStorePipeline.commit(pipelineFile);
+433c438
+<         dataStoreInfo.commit(infoFile);
+---
+>         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
+452,454d456
+<       } finally {
+<         dataStorePipeline.release();
+<         dataStoreInfo.release();
+476,491c478,479
+<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+<       try {
+<         boolean syncNeeded = false;
+<         try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+<           if (dataStorePipeline.isRecovered()) {
+<             syncNeeded = true;
+<           }
+<         }
+<         if (syncNeeded) {
+<           syncPipelineWithPipelineInfo(name);
+<         }
+<       } catch (IOException ex) {
+<         throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, ex.toString(), ex);
+<       }
+<       PipelineInfo info = getInfo(name);
+<       try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+---
+>       try (InputStream pipelineFile = Files.newInputStream(getPipelineFile(name))) {
+>         PipelineInfo info = getInfo(name);
+665,666d652
+<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+668,669c654,655
+<           OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+<           OutputStream infoFile = dataStoreInfo.getOutputStream()
+---
+>           OutputStream infoFile = Files.newOutputStream(getInfoFile(name));
+>           OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(name))
+671,672d656
+<         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(savedPipeline));
+<         dataStorePipeline.commit(pipelineFile);
+674c658
+<         dataStoreInfo.commit(infoFile);
+---
+>         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(savedPipeline));
+677,679d660
+<       } finally {
+<         dataStorePipeline.release();
+<         dataStoreInfo.release();

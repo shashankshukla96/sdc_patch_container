@@ -78,9 +78,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-
-
-//added new import
 import java.io.File;
 
 
@@ -261,32 +258,32 @@ public class FilePipelineStoreTask extends AbstractTask implements PipelineStore
 
   private boolean cleanUp(String name) throws IOException {
 
-    //getPipelineDir(name) will return the path to the "sdc/data/pipeline/pipeline_name/"
     boolean deleted = PipelineDirectoryUtil.deleteAll(getPipelineDir(name).toFile());
     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
     
 
-    //created path to the pipeline's runInfo
+    //create the path to the pipeline's runInfo
     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
 
 
-    //If runInfo returned false, i.e. some files(pipelineStateHistory.json) in runInfo
+    //If runInfo returns false, i.e. some files(pipelineStateHistory.json) in runInfo didn't get delete.
     if (!runInfoDeleted) {
       
       //reading files from that directory
       File[] files = pathToPipeline.listFiles();
 
 
-      // if any file found
+      // if any file found inside the runInfo directory
       if (files.length > 0) {
-        LOG.info("Some files in runInfo could not be deleted. Hence Masking the error");
+        LOG.info("Some files in runInfo could not be deleted. Checking if NFS file system is used");
         runInfoDeleted = true;
         
         for(File file: files) {
           String fileName = file.getName();
-          
-          //The patch will only work, if there are only .nfs files present.
-          if(!fileName.contains(".nfs")) {
+
+          //we check the presence of those files, whose name begins with '.nfs',
+          //if such file exists, then we assume the presence of NFS filesystem and do not attempt to delete them.          
+          if(!fileName.beginsWith(".nfs")) {
             
             runInfoDeleted = false;
             LOG.error("There are more files present, except .nfs files.");
