@@ -1,288 +1,859 @@
-30d29
-< import com.streamsets.datacollector.execution.EventListenerManager;
-58d56
-< import com.streamsets.datacollector.util.credential.PipelineCredentialHandler;
-82a81,82
-> import java.io.File;
-> 
-102,104c102
-<   private EventListenerManager eventListenerManager;
-<   private final PipelineCreator pipelineCreator;
-<   private final PipelineCredentialHandler encryptingCredentialHandler;
+81,82d80
+< import java.io.File;
+< 
+259,260c257
+<   private boolean cleanUp(String name) throws IOException {
+< 
 ---
->   private StateEventListener stateEventListener;
-107,114c105,106
-<   public FilePipelineStoreTask(
-<       RuntimeInfo runtimeInfo,
-<       StageLibraryTask stageLibrary,
-<       PipelineStateStore pipelineStateStore,
-<       EventListenerManager eventListenerManager,
-<       LockCache<String> lockCache,
-<       PipelineCredentialHandler encryptingCredentialHandler
-<   ) {
----
->   public FilePipelineStoreTask(RuntimeInfo runtimeInfo, StageLibraryTask stageLibrary,
->     PipelineStateStore pipelineStateStore, LockCache<String> lockCache) {
-123,132d114
-<     pipelineCreator = new PipelineCreator(
-<         stageLibrary.getPipeline(),
-<         SCHEMA_VERSION,
-<         buildInfo.getVersion(),
-<         runtimeInfo.getId(),
-<         this::getDefaultStatsAggrStageInstance,
-<         this::getDefaultTestOriginStageInstance
-<     );
-<     this.eventListenerManager = eventListenerManager;
-<     this.encryptingCredentialHandler = encryptingCredentialHandler;
-141c123
-<     eventListenerManager.addStateEventListener(stateListener);
----
->     stateEventListener = stateListener;
-221c203,237
-<       PipelineConfiguration pipeline = pipelineCreator.create(user, pipelineId, pipelineTitle, description, new Date());
----
->       Date date = new Date();
->       UUID uuid = UUID.randomUUID();
->       PipelineInfo info = new PipelineInfo(
->           pipelineId,
->           pipelineTitle,
->           description,
->           date,
->           date,
->           user,
->           user,
->           REV,
->           uuid,
->           false,
->           null,
->           buildInfo.getVersion(),
->           runtimeInfo.getId()
->       );
-> 
->       PipelineConfiguration pipeline = new PipelineConfiguration(
->           SCHEMA_VERSION,
->           PipelineConfigBean.VERSION,
->           pipelineId,
->           uuid,
->           pipelineTitle,
->           description,
->           stageLibrary.getPipeline().getPipelineDefaultConfigs(),
->           Collections.emptyMap(),
->           null,
->           Collections.emptyList(),
->           null,
->           getDefaultStatsAggrStageInstance(),
->           Collections.emptyList(),
->           Collections.emptyList(),
->           getDefaultTestOriginStageInstance()
->       );
-224,225d239
-<         DataStore dataStorePipeline = new DataStore(getPipelineFile(pipelineId).toFile());
-<         DataStore dataStoreInfo = new DataStore(getInfoFile(pipelineId).toFile());
-227,228c241,242
-<             OutputStream pipelineFile = dataStorePipeline.getOutputStream();
-<             OutputStream infoFile = dataStoreInfo.getOutputStream()
----
->             OutputStream infoFile = Files.newOutputStream(getInfoFile(pipelineId));
->             OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(pipelineId))
-230c244
-<           // it is important to always modify pipeline.json before modifying info.json in order for recovery to work
----
->           json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(info));
-232,234d245
-<           dataStorePipeline.commit(pipelineFile);
-<           json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipeline.getInfo()));
-<           dataStoreInfo.commit(infoFile);
-237,239d247
-<         } finally {
-<           dataStorePipeline.release();
-<           dataStoreInfo.release();
-246c254
-<       pipeline.setPipelineInfo(pipeline.getInfo());
----
->       pipeline.setPipelineInfo(info);
-251,252c259,260
-<   private boolean cleanUp(String name) {
-<     LogUtil.resetRollingFileAppender(name, "0", STATE);
----
->   private boolean cleanUp(String name) throws IOException {
-> 
-254c262,302
-<     deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
----
->     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
->     
-> 
->     //create the path to the pipeline's runInfo
->     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
-> 
-> 
->     //If runInfo returns false, i.e. some files(pipelineStateHistory.json) in runInfo didn't get delete.
->     if (!runInfoDeleted) {
->       
->       //reading files from that directory
->       File[] files = pathToPipeline.listFiles();
-> 
-> 
->       // if any file found inside the runInfo directory
->       if (files.length > 0) {
->         LOG.info("Some files in runInfo could not be deleted. Checking if NFS file system is used");
->         runInfoDeleted = true;
->         
->         for(File file: files) {
->           String fileName = file.getName();
-> 
->           //we check the presence of those files, whose name begins with '.nfs',
->           //if such file exists, then we assume the presence of NFS filesystem and do not attempt to delete them.          
->           if(!fileName.beginsWith(".nfs")) {
->             
->             runInfoDeleted = false;
->             LOG.error("There are more files present, except .nfs files.");
->             break;
->           } 
->         }   
->       } else {
->         LOG.error("Some exception occurred, Please go through the logs.");
->       }
-> 
->     }
->     
->     deleted &= runInfoDeleted;
->     if(deleted) {
->       LogUtil.resetRollingFileAppender(name, "0", STATE);
->     }
-272c320,323
-<         if (!cleanUp(name)) {
----
-> 
->         //added try catch
->         try {
->           if (!cleanUp(name)) {
-274a326,328
->       }catch(IOException e) {
->         LOG.error("Error in opening pipeline runInfo directory.");
->       }
-289,290c343,344
-<           if (eventListenerManager != null) {
-<             eventListenerManager.broadcastStateChange(currentState, latestState, null, offset);
----
->           if (stateEventListener != null) {
->             stateEventListener.onStateChange(currentState, latestState, "", null, offset);
-317,319c371
-<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
-<       syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
-<       try (InputStream infoFile = dataStoreInfo.getInputStream()){
----
->       try (InputStream infoFile = Files.newInputStream(getInfoFile(name))){
-329,364d380
-<   private void syncPipelineWithPipelineInfoIfNeeded(DataStore dataStoreInfo, String name)
-<       throws PipelineStoreException {
-<     try {
-<       boolean syncNeeded = false;
-<       if (!dataStoreInfo.exists()) {
-<         syncNeeded = true;
+>   private boolean cleanUp(String name) {
+262,299c259
+<     boolean runInfoDeleted = PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
+<     
+< 
+<     //create the path to the pipeline's runInfo
+<     File pathToPipeline = new File(runtimeInfo.getDataDir() + "/runInfo/" + name+"/0/");
+< 
+< 
+<     //If runInfo returns false, i.e. some files(pipelineStateHistory.json) in runInfo didn't get delete.
+<     if (!runInfoDeleted) {
+<       
+<       //reading files from that directory
+<       File[] files = pathToPipeline.listFiles();
+< 
+< 
+<       // if any file found inside the runInfo directory
+<       if (files.length > 0) {
+<         LOG.info("Some files in runInfo could not be deleted. Checking if NFS file system is used");
+<         runInfoDeleted = true;
+<         
+<         for(File file: files) {
+<           String fileName = file.getName();
+< 
+<           //we check the presence of those files, whose name begins with '.nfs',
+<           //if such file exists, then we assume the presence of NFS filesystem and do not attempt to delete them.          
+<           if(!fileName.beginsWith(".nfs")) {
+<             
+<             runInfoDeleted = false;
+<             LOG.error("There are more files present, except .nfs files.");
+<             break;
+<           } 
+<         }   
 <       } else {
-<         try (InputStream infoFile = dataStoreInfo.getInputStream()) {
-<           if (dataStoreInfo.isRecovered()) {
-<             syncNeeded = true;
-<           }
-<         }
+<         LOG.error("Some exception occurred, Please go through the logs.");
 <       }
-<       if (syncNeeded) {
-<         syncPipelineWithPipelineInfo(name);
-<       }
-<     } catch (IOException e) {
-<       throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, e);
-<     }
-<   }
 < 
-<   private void syncPipelineWithPipelineInfo(String name) throws IOException {
-<     DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
-<     try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
-<       PipelineConfigurationJson pipelineConfigBean =
-<           json.readValue(pipelineFile, PipelineConfigurationJson.class);
-<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
-<       try (OutputStream infoFile = dataStoreInfo.getOutputStream()) {
-<         json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipelineConfigBean.getInfo().getPipelineInfo()));
-<         dataStoreInfo.commit(infoFile);
-<       } finally {
-<         dataStoreInfo.release();
-<       }
 <     }
-<   }
+<     
+<     deleted &= runInfoDeleted;
+---
+>     deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
+320,323c280
 < 
-371,373c387
-<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
-<       syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
-<       try (InputStream infoFile = dataStoreInfo.getInputStream()) {
+<         //added try catch
+<         try {
+<           if (!cleanUp(name)) {
 ---
->       try (InputStream infoFile = Files.newInputStream(getInfoFile(name))) {
-388,389c402
-<       PipelineConfiguration pipeline,
-<       boolean encryptCredentials
----
->       PipelineConfiguration pipeline
-419,423d431
-<       if (encryptCredentials) {
-<         encryptingCredentialHandler.handlePipelineConfigCredentials(pipeline);
+>         if (!cleanUp(name)) {
+326,328d282
+<       }catch(IOException e) {
+<         LOG.error("Error in opening pipeline runInfo directory.");
 <       }
-<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
-<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
-425,426c433,434
-<           OutputStream pipelineFile = dataStorePipeline.getOutputStream();
-<           OutputStream infoFile = dataStoreInfo.getOutputStream()
+404c358,1153
+<     synchronized (lockCache.getLock(name)) {
 ---
->           OutputStream infoFile = Files.newOutputStream(getInfoFile(name));
->           OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(name))
-429,431d436
-<         pipeline.setInfo(info);
-<         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
-<         dataStorePipeline.commit(pipelineFile);
-433c438
-<         dataStoreInfo.commit(infoFile);
----
->         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
-452,454d456
-<       } finally {
-<         dataStorePipeline.release();
-<         dataStoreInfo.release();
-476,491c478,479
-<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
-<       try {
-<         boolean syncNeeded = false;
-<         try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
-<           if (dataStorePipeline.isRecovered()) {
-<             syncNeeded = true;
-<           }
-<         }
-<         if (syncNeeded) {
-<           syncPipelineWithPipelineInfo(name);
-<         }
-<       } catch (IOException ex) {
-<         throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, ex.toString(), ex);
-<       }
-<       PipelineInfo info = getInfo(name);
-<       try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
----
->       try (InputStream pipelineFile = Files.newInputStream(getPipelineFile(name))) {
->         PipelineInfo info = getInfo(name);
-665,666d652
-<       DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
-<       DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
-668,669c654,655
-<           OutputStream pipelineFile = dataStorePipeline.getOutputStream();
-<           OutputStream infoFile = dataStoreInfo.getOutputStream()
----
->           OutputStream infoFile = Files.newOutputStream(getInfoFile(name));
->           OutputStream pipelineFile = Files.newOutputStream(getPipelineFile(name))
-671,672d656
-<         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(savedPipeline));
-<         dataStorePipeline.commit(pipelineFile);
-674c658
-<         dataStoreInfo.commit(infoFile);
----
->         json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(savedPipeline));
-677,679d660
-<       } finally {
-<         dataStorePipeline.release();
-<         dataStoreInfo.release();
+>     synchronized (lockCache./*
+>     * Copyright 2017 StreamSets Inc.
+>     *
+>     * Licensed under the Apache License, Version 2.0 (the "License");
+>     * you may not use this file except in compliance with the License.
+>     * You may obtain a copy of the License at
+>     *
+>     *     http://www.apache.org/licenses/LICENSE-2.0
+>     *
+>     * Unless required by applicable law or agreed to in writing, software
+>     * distributed under the License is distributed on an "AS IS" BASIS,
+>     * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+>     * See the License for the specific language governing permissions and
+>     * limitations under the License.
+>     */
+>    package com.streamsets.datacollector.store.impl;
+>    
+>    import com.fasterxml.jackson.databind.ObjectMapper;
+>    import com.google.common.annotations.VisibleForTesting;
+>    import com.google.common.collect.ImmutableList;
+>    import com.streamsets.datacollector.config.PipelineConfiguration;
+>    import com.streamsets.datacollector.config.PipelineFragmentConfiguration;
+>    import com.streamsets.datacollector.config.RuleDefinitions;
+>    import com.streamsets.datacollector.config.StageConfiguration;
+>    import com.streamsets.datacollector.creation.PipelineBeanCreator;
+>    import com.streamsets.datacollector.creation.PipelineConfigBean;
+>    import com.streamsets.datacollector.creation.PipelineFragmentConfigBean;
+>    import com.streamsets.datacollector.creation.RuleDefinitionsConfigBean;
+>    import com.streamsets.datacollector.event.handler.remote.RemoteDataCollector;
+>    import com.streamsets.datacollector.execution.EventListenerManager;
+>    import com.streamsets.datacollector.execution.PipelineState;
+>    import com.streamsets.datacollector.execution.PipelineStateStore;
+>    import com.streamsets.datacollector.execution.PipelineStatus;
+>    import com.streamsets.datacollector.execution.StateEventListener;
+>    import com.streamsets.datacollector.execution.manager.PipelineStateImpl;
+>    import com.streamsets.datacollector.io.DataStore;
+>    import com.streamsets.datacollector.json.ObjectMapperFactory;
+>    import com.streamsets.datacollector.main.BuildInfo;
+>    import com.streamsets.datacollector.main.DataCollectorBuildInfo;
+>    import com.streamsets.datacollector.main.RuntimeInfo;
+>    import com.streamsets.datacollector.restapi.bean.BeanHelper;
+>    import com.streamsets.datacollector.restapi.bean.PipelineConfigurationJson;
+>    import com.streamsets.datacollector.restapi.bean.PipelineInfoJson;
+>    import com.streamsets.datacollector.restapi.bean.RuleDefinitionsJson;
+>    import com.streamsets.datacollector.runner.production.OffsetFileUtil;
+>    import com.streamsets.datacollector.stagelibrary.StageLibraryTask;
+>    import com.streamsets.datacollector.store.PipelineInfo;
+>    import com.streamsets.datacollector.store.PipelineRevInfo;
+>    import com.streamsets.datacollector.store.PipelineStoreException;
+>    import com.streamsets.datacollector.store.PipelineStoreTask;
+>    import com.streamsets.datacollector.task.AbstractTask;
+>    import com.streamsets.datacollector.util.ContainerError;
+>    import com.streamsets.datacollector.util.LockCache;
+>    import com.streamsets.datacollector.util.LogUtil;
+>    import com.streamsets.datacollector.util.PipelineConfigurationUtil;
+>    import com.streamsets.datacollector.util.PipelineDirectoryUtil;
+>    import com.streamsets.datacollector.util.PipelineException;
+>    import com.streamsets.datacollector.util.credential.PipelineCredentialHandler;
+>    import com.streamsets.datacollector.validation.Issue;
+>    import com.streamsets.pipeline.api.ExecutionMode;
+>    import com.streamsets.pipeline.api.impl.PipelineUtils;
+>    import com.streamsets.pipeline.api.impl.Utils;
+>    import org.slf4j.Logger;
+>    import org.slf4j.LoggerFactory;
+>    
+>    import javax.inject.Inject;
+>    import java.io.IOException;
+>    import java.io.InputStream;
+>    import java.io.OutputStream;
+>    import java.nio.file.DirectoryStream;
+>    import java.nio.file.Files;
+>    import java.nio.file.Path;
+>    import java.nio.file.Paths;
+>    import java.util.ArrayList;
+>    import java.util.Collections;
+>    import java.util.Date;
+>    import java.util.HashMap;
+>    import java.util.List;
+>    import java.util.Map;
+>    import java.util.UUID;
+>    import java.util.concurrent.ConcurrentHashMap;
+>    import java.util.concurrent.ConcurrentMap;
+>    
+>    public class FilePipelineStoreTask extends AbstractTask implements PipelineStoreTask {
+>      private static final Logger LOG = LoggerFactory.getLogger(FilePipelineStoreTask.class);
+>      private final LockCache<String> lockCache;
+>      @VisibleForTesting
+>      static final String REV = "0";
+>      public static final String INFO_FILE = "info.json";
+>      public static final String PIPELINE_FILE = "pipeline.json";
+>      private static final String UI_INFO_FILE = "uiinfo.json";
+>      public static final String RULES_FILE = "rules.json";
+>      private static final String STATE = "state";
+>    
+>      private final StageLibraryTask stageLibrary;
+>      private final RuntimeInfo runtimeInfo;
+>      private final BuildInfo buildInfo;
+>      private Path storeDir;
+>      private final ObjectMapper json;
+>      private final PipelineStateStore pipelineStateStore;
+>      private final ConcurrentMap<String, RuleDefinitions> pipelineToRuleDefinitionMap;
+>      private EventListenerManager eventListenerManager;
+>      private final PipelineCreator pipelineCreator;
+>      private final PipelineCredentialHandler encryptingCredentialHandler;
+>    
+>      @Inject
+>      public FilePipelineStoreTask(
+>          RuntimeInfo runtimeInfo,
+>          StageLibraryTask stageLibrary,
+>          PipelineStateStore pipelineStateStore,
+>          EventListenerManager eventListenerManager,
+>          LockCache<String> lockCache,
+>          PipelineCredentialHandler encryptingCredentialHandler
+>      ) {
+>        super("filePipelineStore");
+>        this.stageLibrary = stageLibrary;
+>        this.runtimeInfo = runtimeInfo;
+>        json = ObjectMapperFactory.get();
+>        pipelineToRuleDefinitionMap = new ConcurrentHashMap<>();
+>        this.pipelineStateStore = pipelineStateStore;
+>        this.lockCache = lockCache;
+>        buildInfo = new DataCollectorBuildInfo();
+>        pipelineCreator = new PipelineCreator(
+>            stageLibrary.getPipeline(),
+>            SCHEMA_VERSION,
+>            buildInfo.getVersion(),
+>            runtimeInfo.getId(),
+>            this::getDefaultStatsAggrStageInstance,
+>            this::getDefaultTestOriginStageInstance
+>        );
+>        this.eventListenerManager = eventListenerManager;
+>        this.encryptingCredentialHandler = encryptingCredentialHandler;
+>      }
+>    
+>      @VisibleForTesting
+>      Path getStoreDir() {
+>        return storeDir;
+>      }
+>    
+>      public void registerStateListener(StateEventListener stateListener) {
+>        eventListenerManager.addStateEventListener(stateListener);
+>      }
+>    
+>      @Override
+>      public void initTask() {
+>        storeDir = Paths.get(runtimeInfo.getDataDir(), PipelineDirectoryUtil.PIPELINE_INFO_BASE_DIR);
+>        if (!Files.exists(storeDir)) {
+>          try {
+>            Files.createDirectories(storeDir);
+>          } catch (IOException e) {
+>            throw new RuntimeException(Utils.format("Could not create directory '{}'", storeDir), e);
+>          }
+>        }
+>        if (pipelineStateStore != null) {
+>          pipelineStateStore.init();
+>        }
+>      }
+>    
+>      @Override
+>      public void stopTask() {
+>        if (pipelineStateStore != null) {
+>          pipelineStateStore.destroy();
+>        }
+>      }
+>    
+>      public Path getPipelineDir(String name) {
+>        return storeDir.resolve(PipelineUtils.escapedPipelineName(name));
+>      }
+>    
+>      @VisibleForTesting
+>      private Path getInfoFile(String name) {
+>        return getPipelineDir(name).resolve(INFO_FILE);
+>      }
+>    
+>      private Path getPipelineFile(String name) {
+>        return getPipelineDir(name).resolve(PIPELINE_FILE);
+>      }
+>    
+>      private Path getPipelineUiInfoFile(String name) {
+>        return getPipelineDir(name).resolve(UI_INFO_FILE);
+>      }
+>    
+>      private Path getRulesFile(String name) {
+>        return getPipelineDir(name).resolve(RULES_FILE);
+>      }
+>    
+>      @Override
+>      public boolean hasPipeline(String name) {
+>        return Files.exists(getPipelineDir(name));
+>      }
+>    
+>      @Override
+>      public PipelineConfiguration create(
+>          String user,
+>          String pipelineId,
+>          String pipelineTitle,
+>          String description,
+>          boolean isRemote,
+>          boolean draft,
+>          Map<String, Object> metadata
+>      ) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(pipelineId)) {
+>          if (hasPipeline(pipelineId)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0201, pipelineId);
+>          }
+>    
+>          if (!draft) {
+>            try {
+>              Files.createDirectory(getPipelineDir(pipelineId));
+>              Files.createDirectories(PipelineDirectoryUtil.getPipelineDir(runtimeInfo, pipelineId, REV).toPath());
+>            } catch (IOException e) {
+>              throw new PipelineStoreException(
+>                  ContainerError.CONTAINER_0202,
+>                  pipelineId,
+>                  "mkdir failed",
+>                  e
+>              );
+>            }
+>          }
+>    
+>          PipelineConfiguration pipeline = pipelineCreator.create(user, pipelineId, pipelineTitle, description, new Date());
+>    
+>          if (!draft) {
+>            DataStore dataStorePipeline = new DataStore(getPipelineFile(pipelineId).toFile());
+>            DataStore dataStoreInfo = new DataStore(getInfoFile(pipelineId).toFile());
+>            try (
+>                OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+>                OutputStream infoFile = dataStoreInfo.getOutputStream()
+>            ){
+>              // it is important to always modify pipeline.json before modifying info.json in order for recovery to work
+>              json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
+>              dataStorePipeline.commit(pipelineFile);
+>              json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipeline.getInfo()));
+>              dataStoreInfo.commit(infoFile);
+>            } catch (Exception ex) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0202, pipelineId, ex.toString(), ex);
+>            } finally {
+>              dataStorePipeline.release();
+>              dataStoreInfo.release();
+>            }
+>            if (pipelineStateStore != null) {
+>              pipelineStateStore.edited(user, pipelineId, REV, ExecutionMode.STANDALONE, isRemote, metadata);
+>            }
+>          }
+>    
+>          pipeline.setPipelineInfo(pipeline.getInfo());
+>          return pipeline;
+>        }
+>      }
+>    
+>      private boolean cleanUp(String name) {
+>        LogUtil.resetRollingFileAppender(name, "0", STATE);
+>        boolean deleted = PipelineDirectoryUtil.deleteAll(getPipelineDir(name).toFile());
+>        deleted &= PipelineDirectoryUtil.deletePipelineDir(runtimeInfo, name);
+>        return deleted;
+>      }
+>    
+>      @Override
+>      public void delete(String name) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          if (!hasPipeline(name)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>          }
+>          if (pipelineStateStore != null) {
+>            // For now, passing rev 0 - make delete take tag/rev as a parameter
+>            PipelineState currentState = pipelineStateStore.getState(name, REV);
+>            PipelineStatus pipelineStatus = currentState.getStatus();
+>            if (pipelineStatus.isActive()) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0208, pipelineStatus);
+>            }
+>            Map<String, String> offset = OffsetFileUtil.getOffsets(runtimeInfo, name, REV);
+>            if (!cleanUp(name)) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0203, name);
+>            }
+>            PipelineState latestState = new PipelineStateImpl(
+>                currentState.getUser(),
+>                currentState.getPipelineId(),
+>                currentState.getRev(),
+>                PipelineStatus.DELETED,
+>                "Pipeline is deleted",
+>                System.currentTimeMillis(),
+>                currentState.getAttributes(),
+>                currentState.getExecutionMode(),
+>                currentState.getMetrics(),
+>                currentState.getRetryAttempt(),
+>                currentState.getNextRetryTimeStamp()
+>            );
+>            try {
+>              if (eventListenerManager != null) {
+>                eventListenerManager.broadcastStateChange(currentState, latestState, null, offset);
+>              }
+>            } catch (Exception e) {
+>              LOG.warn("Cannot set delete event for pipeline");
+>            }
+>            pipelineStateStore.delete(name, REV);
+>          }
+>        }
+>      }
+>    
+>      private DirectoryStream.Filter<Path> filterHiddenFiles = path -> !path.getFileName().toString().startsWith(".");
+>    
+>      @Override
+>      public List<PipelineInfo> getPipelines() throws PipelineStoreException {
+>        List<PipelineInfo> pipelineInfoList = new ArrayList<>();
+>    
+>        List<String> fileNames = new ArrayList<>();
+>        try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(storeDir, filterHiddenFiles)) {
+>          for (Path path : directoryStream) {
+>            fileNames.add(path.getFileName().toString());
+>          }
+>        } catch (IOException ex) {
+>          throw new PipelineStoreException(ContainerError.CONTAINER_0213, storeDir, ex);
+>        }
+>    
+>        for (String name : fileNames) {
+>          PipelineInfoJson pipelineInfoJsonBean;
+>          DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+>          syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
+>          try (InputStream infoFile = dataStoreInfo.getInputStream()){
+>            pipelineInfoJsonBean = json.readValue(infoFile, PipelineInfoJson.class);
+>          } catch (IOException e) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, e);
+>          }
+>          pipelineInfoList.add(pipelineInfoJsonBean.getPipelineInfo());
+>        }
+>        return Collections.unmodifiableList(pipelineInfoList);
+>      }
+>    
+>      private void syncPipelineWithPipelineInfoIfNeeded(DataStore dataStoreInfo, String name)
+>          throws PipelineStoreException {
+>        try {
+>          boolean syncNeeded = false;
+>          if (!dataStoreInfo.exists()) {
+>            syncNeeded = true;
+>          } else {
+>            try (InputStream infoFile = dataStoreInfo.getInputStream()) {
+>              if (dataStoreInfo.isRecovered()) {
+>                syncNeeded = true;
+>              }
+>            }
+>          }
+>          if (syncNeeded) {
+>            syncPipelineWithPipelineInfo(name);
+>          }
+>        } catch (IOException e) {
+>          throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, e);
+>        }
+>      }
+>    
+>      private void syncPipelineWithPipelineInfo(String name) throws IOException {
+>        DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+>        try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+>          PipelineConfigurationJson pipelineConfigBean =
+>              json.readValue(pipelineFile, PipelineConfigurationJson.class);
+>          DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+>          try (OutputStream infoFile = dataStoreInfo.getOutputStream()) {
+>            json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(pipelineConfigBean.getInfo().getPipelineInfo()));
+>            dataStoreInfo.commit(infoFile);
+>          } finally {
+>            dataStoreInfo.release();
+>          }
+>        }
+>      }
+>    
+>      @Override
+>      public PipelineInfo getInfo(String name) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          if (!hasPipeline(name)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>          }
+>          DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+>          syncPipelineWithPipelineInfoIfNeeded(dataStoreInfo, name);
+>          try (InputStream infoFile = dataStoreInfo.getInputStream()) {
+>            PipelineInfoJson pipelineInfoJsonBean = json.readValue(infoFile, PipelineInfoJson.class);
+>            return pipelineInfoJsonBean.getPipelineInfo();
+>          } catch (Exception ex) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, ex);
+>          }
+>        }
+>      }
+>    
+>      @Override
+>      public PipelineConfiguration save(
+>          String user,
+>          String name,
+>          String tag,
+>          String tagDescription,
+>          PipelineConfiguration pipeline,
+>          boolean encryptCredentials
+>      ) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          if (!hasPipeline(name)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>          }
+>          PipelineInfo savedInfo = getInfo(name);
+>          if (!savedInfo.getUuid().equals(pipeline.getUuid())) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0205, name);
+>          }
+>          if (pipelineStateStore != null) {
+>            PipelineStatus pipelineStatus = pipelineStateStore.getState(name, tag).getStatus();
+>            if (pipelineStatus.isActive()) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0208, pipelineStatus);
+>            }
+>          }
+>          UUID uuid = UUID.randomUUID();
+>          PipelineInfo info = new PipelineInfo(
+>              getInfo(name),
+>              pipeline.getTitle(),
+>              pipeline.getDescription(),
+>              new Date(),
+>              user,
+>              REV,
+>              uuid,
+>              pipeline.isValid(),
+>              pipeline.getMetadata(),
+>              buildInfo.getVersion(),
+>              runtimeInfo.getId()
+>          );
+>          if (encryptCredentials) {
+>            encryptingCredentialHandler.handlePipelineConfigCredentials(pipeline);
+>          }
+>          DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+>          DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+>          try (
+>              OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+>              OutputStream infoFile = dataStoreInfo.getOutputStream()
+>            ){
+>            pipeline.setUuid(uuid);
+>            pipeline.setInfo(info);
+>            json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(pipeline));
+>            dataStorePipeline.commit(pipelineFile);
+>            json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(info));
+>            dataStoreInfo.commit(infoFile);
+>            if (pipelineStateStore != null) {
+>              List<Issue> errors = new ArrayList<>();
+>              PipelineBeanCreator.get().create(pipeline, errors, null);
+>              pipelineStateStore.edited(user,
+>                  name,
+>                  tag,
+>                  PipelineBeanCreator.get().getExecutionMode(pipeline, errors),
+>                  false,
+>                  null
+>              );
+>              pipeline.getIssues().addAll(errors);
+>            }
+>    
+>            Map<String, Object> uiInfo = extractUiInfo(pipeline);
+>            saveUiInfo(name, tag, uiInfo);
+>    
+>          } catch (Exception ex) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0204, name, ex.toString(), ex);
+>          } finally {
+>            dataStorePipeline.release();
+>            dataStoreInfo.release();
+>          }
+>          pipeline.setPipelineInfo(info);
+>          return pipeline;
+>        }
+>      }
+>    
+>      @Override
+>      @SuppressWarnings("unchecked")
+>      public List<PipelineRevInfo> getHistory(String name) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          return ImmutableList.of(new PipelineRevInfo(getInfo(name)));
+>        }
+>      }
+>    
+>      @Override
+>      @SuppressWarnings("unchecked")
+>      public PipelineConfiguration load(String name, String tagOrRev) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          if (!hasPipeline(name)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>          }
+>          DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+>          try {
+>            boolean syncNeeded = false;
+>            try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+>              if (dataStorePipeline.isRecovered()) {
+>                syncNeeded = true;
+>              }
+>            }
+>            if (syncNeeded) {
+>              syncPipelineWithPipelineInfo(name);
+>            }
+>          } catch (IOException ex) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, ex.toString(), ex);
+>          }
+>          PipelineInfo info = getInfo(name);
+>          try (InputStream pipelineFile = dataStorePipeline.getInputStream()) {
+>            PipelineConfigurationJson pipelineConfigBean =
+>              json.readValue(pipelineFile, PipelineConfigurationJson.class);
+>            PipelineConfiguration pipeline = pipelineConfigBean.getPipelineConfiguration();
+>            pipeline.setPipelineInfo(info);
+>    
+>            Map<String, Map> uiInfo;
+>            if (Files.exists(getPipelineUiInfoFile(name))) {
+>              try (InputStream uiInfoFile = Files.newInputStream(getPipelineUiInfoFile(name))) {
+>                uiInfo = json.readValue(uiInfoFile, Map.class);
+>                pipeline = injectUiInfo(uiInfo, pipeline);
+>              }
+>            }
+>    
+>            return pipeline;
+>          }
+>          catch (Exception ex) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0206, name, ex.toString(), ex);
+>          }
+>        }
+>      }
+>    
+>      @Override
+>      public RuleDefinitions retrieveRules(String name, String tagOrRev) throws PipelineStoreException {
+>        synchronized (lockCache.getLock(name)) {
+>          if(!pipelineToRuleDefinitionMap.containsKey(getPipelineKey(name, tagOrRev))) {
+>            if (!hasPipeline(name)) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>            }
+>            //try loading from store, needed in cases like restart
+>            RuleDefinitions ruleDefinitions = null;
+>            DataStore ds = new DataStore(getRulesFile(name).toFile());
+>            try {
+>              if (ds.exists()) {
+>                try (InputStream is = ds.getInputStream()) {
+>                  RuleDefinitionsJson ruleDefinitionsJsonBean =
+>                      ObjectMapperFactory.get().readValue(is, RuleDefinitionsJson.class);
+>                  ruleDefinitions = ruleDefinitionsJsonBean.getRuleDefinitions();
+>                }
+>              }
+>            } catch (IOException ex) {
+>              //File does not exist
+>              LOG.debug(ContainerError.CONTAINER_0403.getMessage(), name, ex.toString(),
+>                  ex);
+>              ruleDefinitions = null;
+>            }
+>            if(ruleDefinitions == null) {
+>              ruleDefinitions = new RuleDefinitions(
+>                  PipelineStoreTask.RULE_DEFINITIONS_SCHEMA_VERSION,
+>                  RuleDefinitionsConfigBean.VERSION,
+>                  new ArrayList<>(),
+>                  new ArrayList<>(),
+>                  new ArrayList<>(),
+>                  new ArrayList<>(),
+>                  UUID.randomUUID(),
+>                  stageLibrary.getPipelineRules().getPipelineRulesDefaultConfigs()
+>              );
+>            }
+>            pipelineToRuleDefinitionMap.put(getPipelineKey(name, tagOrRev), ruleDefinitions);
+>          }
+>          return pipelineToRuleDefinitionMap.get(getPipelineKey(name, tagOrRev));
+>        }
+>      }
+>    
+>      @Override
+>      public RuleDefinitions storeRules(
+>          String pipelineName,
+>          String tag,
+>          RuleDefinitions ruleDefinitions,
+>          boolean draft
+>      )
+>        throws PipelineStoreException {
+>        synchronized (lockCache.getLock(pipelineName)) {
+>          if (!draft) {
+>            // check the uuid of the ex
+>            if (!hasPipeline(pipelineName)) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0200, pipelineName);
+>            }
+>            // Listing rule definition to detect any change since the previous load.
+>            // two browsers could modify the same rule definition
+>            if (pipelineToRuleDefinitionMap.get(getPipelineKey(pipelineName, tag)) != null) {
+>              UUID savedUuid = pipelineToRuleDefinitionMap.get(getPipelineKey(pipelineName, tag)).getUuid();
+>              if (!savedUuid.equals(ruleDefinitions.getUuid())) {
+>                throw new PipelineStoreException(ContainerError.CONTAINER_0205, pipelineName);
+>              }
+>            }
+>          }
+>    
+>          UUID uuid = UUID.randomUUID();
+>          ruleDefinitions.setUuid(uuid);
+>    
+>          if (!draft) {
+>            DataStore dataStore = new DataStore(getRulesFile(pipelineName).toFile());
+>            try (OutputStream os = dataStore.getOutputStream()) {
+>              ObjectMapperFactory.get().writeValue(os, BeanHelper.wrapRuleDefinitions(ruleDefinitions));
+>              dataStore.commit(os);
+>              pipelineToRuleDefinitionMap.put(getPipelineKey(pipelineName, tag), ruleDefinitions);
+>            } catch (IOException ex) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0404, pipelineName, ex.toString(), ex);
+>            } finally {
+>              dataStore.release();
+>            }
+>          }
+>    
+>          return ruleDefinitions;
+>        }
+>      }
+>    
+>      @Override
+>      public boolean deleteRules(String name) {
+>        synchronized (lockCache.getLock(name)) {
+>          pipelineToRuleDefinitionMap.remove(getPipelineKey(name, REV));
+>          if (hasPipeline(name)) {
+>            try {
+>              return Files.deleteIfExists(getRulesFile(name));
+>            } catch (IOException e) {
+>              LOG.error("Exception when deleting rules file", e);
+>              return false;
+>            }
+>          }
+>          return false;
+>        }
+>      }
+>    
+>      private String getPipelineKey(String pipelineName, String rev) {
+>        return pipelineName + "$" + rev;
+>      }
+>    
+>      @Override
+>      public void saveUiInfo(String name, String rev, Map<String, Object> uiInfo) throws PipelineStoreException {
+>        try (OutputStream uiInfoFile = Files.newOutputStream(getPipelineUiInfoFile(name))){
+>          json.writeValue(uiInfoFile, uiInfo);
+>        } catch (Exception ex) {
+>          throw new PipelineStoreException(ContainerError.CONTAINER_0405, name, ex.toString(), ex);
+>        }
+>      }
+>    
+>      @Override
+>      public PipelineConfiguration saveMetadata(
+>          String user,
+>          String name,
+>          String rev,
+>          Map<String, Object> metadata
+>      ) throws PipelineException {
+>        synchronized (lockCache.getLock(name)) {
+>          if (!hasPipeline(name)) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0200, name);
+>          }
+>          PipelineConfiguration savedPipeline = load(name, rev);
+>          PipelineInfo savedInfo = getInfo(name);
+>    
+>          if (pipelineStateStore != null) {
+>            PipelineStatus pipelineStatus = pipelineStateStore.getState(name, rev).getStatus();
+>            if (pipelineStatus.isActive()) {
+>              throw new PipelineStoreException(ContainerError.CONTAINER_0208, pipelineStatus);
+>            }
+>          }
+>    
+>          PipelineInfo updatedInfo = new PipelineInfo(
+>              getInfo(name),
+>              savedPipeline.getTitle(),
+>              savedPipeline.getDescription(),
+>              new Date(),
+>              user,
+>              REV,
+>              savedInfo.getUuid(),
+>              savedInfo.isValid(),
+>              metadata,
+>              buildInfo.getVersion(),
+>              runtimeInfo.getId()
+>          );
+>          savedPipeline.setMetadata(metadata);
+>          savedPipeline.setPipelineInfo(updatedInfo);
+>    
+>          DataStore dataStorePipeline = new DataStore(getPipelineFile(name).toFile());
+>          DataStore dataStoreInfo = new DataStore(getInfoFile(name).toFile());
+>          try (
+>              OutputStream pipelineFile = dataStorePipeline.getOutputStream();
+>              OutputStream infoFile = dataStoreInfo.getOutputStream()
+>          ) {
+>            json.writeValue(pipelineFile, BeanHelper.wrapPipelineConfiguration(savedPipeline));
+>            dataStorePipeline.commit(pipelineFile);
+>            json.writeValue(infoFile, BeanHelper.wrapPipelineInfo(updatedInfo));
+>            dataStoreInfo.commit(infoFile);
+>          } catch (Exception ex) {
+>            throw new PipelineStoreException(ContainerError.CONTAINER_0204, name, ex.toString(), ex);
+>          } finally {
+>            dataStorePipeline.release();
+>            dataStoreInfo.release();
+>          }
+>          return savedPipeline;
+>        }
+>      }
+>    
+>      @VisibleForTesting
+>      static Map<String, Object> extractUiInfo(PipelineConfiguration pipelineConf) {
+>        Map<String, Object> map = new HashMap<>();
+>        map.put(":pipeline:", pipelineConf.getUiInfo());
+>        for (StageConfiguration stage : pipelineConf.getStages()) {
+>          map.put(stage.getInstanceName(), stage.getUiInfo());
+>        }
+>        return map;
+>      }
+>    
+>      @SuppressWarnings("unchecked")
+>      private PipelineConfiguration injectUiInfo(Map<String, Map> uiInfo, PipelineConfiguration pipelineConf) {
+>        pipelineConf.getUiInfo().clear();
+>        if (uiInfo.containsKey(":pipeline:")) {
+>          pipelineConf.getUiInfo().clear();
+>          pipelineConf.getUiInfo().putAll(uiInfo.get(":pipeline:"));
+>        }
+>        for (StageConfiguration stage : pipelineConf.getStages()) {
+>          stage.getUiInfo().clear();
+>          if (uiInfo.containsKey(stage.getInstanceName())) {
+>            stage.getUiInfo().clear();
+>            stage.getUiInfo().putAll(uiInfo.get(stage.getInstanceName()));
+>          }
+>        }
+>        return pipelineConf;
+>      }
+>    
+>      @Override
+>      public boolean isRemotePipeline(String name, String rev) throws PipelineStoreException {
+>        Object isRemote = pipelineStateStore
+>            .getState(name, rev)
+>            .getAttributes()
+>            .get(RemoteDataCollector.IS_REMOTE_PIPELINE);
+>        // remote attribute will be null for pipelines with version earlier than 1.3
+>        return isRemote != null && (boolean) isRemote;
+>      }
+>    
+>      @Override
+>      public PipelineFragmentConfiguration createPipelineFragment(
+>          String user,
+>          String pipelineId,
+>          String pipelineTitle,
+>          String description,
+>          boolean draft
+>      ) {
+>        // Supporting only draft version now - not storing in disk
+>        synchronized (lockCache.getLock(pipelineId)) {
+>          Date date = new Date();
+>          UUID uuid = UUID.randomUUID();
+>          PipelineInfo info = new PipelineInfo(
+>              pipelineId,
+>              pipelineTitle,
+>              description,
+>              date,
+>              date,
+>              user,
+>              user,
+>              REV,
+>              uuid,
+>              false,
+>              null,
+>              buildInfo.getVersion(),
+>              runtimeInfo.getId()
+>          );
+>    
+>          PipelineFragmentConfiguration pipelineFragmentConfiguration = new PipelineFragmentConfiguration(
+>              uuid,
+>              PipelineFragmentConfigBean.VERSION,
+>              FRAGMENT_SCHEMA_VERSION,
+>              pipelineTitle,
+>              pipelineId,
+>              pipelineId,
+>              description,
+>              Collections.emptyList(),
+>              Collections.emptyList(),
+>              Collections.emptyMap(),
+>              stageLibrary.getPipelineFragment().getPipelineFragmentDefaultConfigs(),
+>              getDefaultTestOriginStageInstance()
+>          );
+>          pipelineFragmentConfiguration.setPipelineInfo(info);
+>          return pipelineFragmentConfiguration;
+>        }
+>      }
+>    
+>      private StageConfiguration getDefaultTestOriginStageInstance() {
+>        StageConfiguration testOriginStageInstance = PipelineConfigurationUtil.getStageConfigurationWithDefaultValues(
+>            stageLibrary,
+>            PipelineConfigBean.DEFAULT_TEST_ORIGIN_LIBRARY_NAME,
+>            PipelineConfigBean.DEFAULT_TEST_ORIGIN_STAGE_NAME,
+>            PipelineConfigBean.DEFAULT_TEST_ORIGIN_STAGE_NAME + "_TestOriginStage",
+>            "Test Origin - "
+>        );
+>        if (testOriginStageInstance != null) {
+>          testOriginStageInstance.setOutputLanes(
+>              ImmutableList.of(testOriginStageInstance.getInstanceName() + "OutputLane1")
+>          );
+>        }
+>        return testOriginStageInstance;
+>      }
+>    
+>      private StageConfiguration getDefaultStatsAggrStageInstance() {
+>        return PipelineConfigurationUtil.getStageConfigurationWithDefaultValues(
+>            stageLibrary,
+>            PipelineConfigBean.DEFAULT_STATS_AGGREGATOR_LIBRARY_NAME,
+>            PipelineConfigBean.DEFAULT_STATS_AGGREGATOR_STAGE_NAME,
+>             "statsAggregatorStageInstance",
+>            "Stats Aggregator -"
+>        );
+>      }
+>    
+>    }
+>    getLock(name)) {
